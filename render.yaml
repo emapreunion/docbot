@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: docbot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false          # à renseigner manuellement dans Render (secret)
+      - key: BOT_NAME
+        value: DocBot
+      - key: SYSTEM_PROMPT
+        value: "Tu es un assistant documentaire. Réponds UNIQUEMENT en français, en te basant exclusivement sur les documents et sources fournis. Si la réponse n'est pas dans les sources, dis-le clairement. Sois précis et bienveillant."
+      - key: SOURCE_URLS
+        value: ""            # ex: https://monsite.com/page1,https://monsite.com/page2
