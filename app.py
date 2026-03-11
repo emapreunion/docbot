@@ -16,8 +16,9 @@ from bs4 import BeautifulSoup
 app = Flask(__name__)
 CORS(app)
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 BOT_NAME = os.environ.get("BOT_NAME", "DocBot")
 SYSTEM_PROMPT = os.environ.get("SYSTEM_PROMPT", (
@@ -88,7 +89,6 @@ def build_context():
         for url in [u.strip() for u in urls_env.split(",") if u.strip()]:
             try:
                 content = load_url(url)
-                # Limite à 20 000 caractères par URL
                 content = content[:20000]
                 parts.append(f"=== SOURCE WEB : {url} ===\n{content}")
                 print(f"[OK] URL chargée : {url} ({len(content)} caractères)")
@@ -119,12 +119,12 @@ def status():
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    if not GEMINI_API_KEY:
-        return jsonify({"error": "Clé API Gemini manquante sur le serveur."}), 500
+    if not GROQ_API_KEY:
+        return jsonify({"error": "Clé API Groq manquante sur le serveur."}), 500
 
     data = request.get_json()
     question = (data.get("message") or "").strip()
-    history = data.get("history") or []
+    history  = data.get("history") or []
 
     if not question:
         return jsonify({"error": "Message vide."}), 400
@@ -132,59 +132,49 @@ def chat():
     if not SOURCES_CONTEXT:
         return jsonify({"error": "Aucune source chargée sur le serveur."}), 500
 
-    # Construction du prompt avec contexte
-    context_message = (
+    # System message avec le contexte complet
+    system_message = (
         f"{SYSTEM_PROMPT}\n\n"
         f"Voici les documents et sources à ta disposition :\n\n"
-        f"{SOURCES_CONTEXT[:60000]}\n\n"  # limite sécurité
+        f"{SOURCES_CONTEXT[:60000]}\n\n"
         f"---\nRéponds uniquement en français."
     )
 
-    # Historique Gemini
-    contents = []
+    # Construction des messages (format OpenAI compatible)
+    messages = [{"role": "system", "content": system_message}]
 
-    # Injection du contexte dans le premier message utilisateur
-    if history:
-        first = history[0]
-        contents.append({
-            "role": "user",
-            "parts": [{"text": context_message + "\n\nQuestion : " + first.get("content", "")}]
-        })
-        if len(history) > 1:
-            for msg in history[1:]:
-                role = "model" if msg["role"] == "assistant" else "user"
-                contents.append({"role": role, "parts": [{"text": msg["content"]}]})
-    else:
-        contents.append({
-            "role": "user",
-            "parts": [{"text": context_message + "\n\nQuestion : " + question}]
-        })
+    # Ajout de l'historique (max 10 derniers échanges)
+    for msg in history[-10:]:
+        role = "assistant" if msg["role"] == "assistant" else "user"
+        messages.append({"role": role, "content": msg["content"]})
 
-    # Si on a déjà un historique, ajouter la nouvelle question
-    if history:
-        contents.append({"role": "user", "parts": [{"text": question}]})
+    # Question actuelle
+    messages.append({"role": "user", "content": question})
 
     payload = {
-        "contents": contents,
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 2048,
-        }
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": 2048,
     }
 
     try:
         resp = requests.post(
-            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+            GROQ_URL,
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
             json=payload,
             timeout=30
         )
         resp.raise_for_status()
         result = resp.json()
-        answer = result["candidates"][0]["content"]["parts"][0]["text"]
+        answer = result["choices"][0]["message"]["content"]
         return jsonify({"answer": answer})
     except requests.exceptions.HTTPError as e:
         err = resp.json().get("error", {}).get("message", str(e))
-        return jsonify({"error": f"Erreur Gemini : {err}"}), 500
+        return jsonify({"error": f"Erreur Groq : {err}"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
